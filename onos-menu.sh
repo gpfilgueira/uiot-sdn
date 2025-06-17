@@ -2,7 +2,7 @@
 
 # Carrega arquivo .secrets
 if [ -f ".secrets" ]; then
-    source .env
+    source .secrets
 else
     echo "Erro: Arquivo .secrets não encontrado!" >&2
     exit 1
