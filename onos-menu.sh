@@ -8,6 +8,11 @@ else
     exit 1
 fi
 
+# Função auxiliar para pausar
+pause() {
+  echo ""
+  read -n 1 -s -r -p "Pressione qualquer tecla para voltar ao menu..."
+}
 
 # Função para iniciar ou criar o container ONOS
 start_onos_container() {
@@ -26,6 +31,7 @@ start_onos_container() {
       echo "Container ONOS iniciado."
     fi
   fi
+  pause
 }
 
 # Função para parar o container ONOS
@@ -37,6 +43,7 @@ stop_onos_container() {
   else
     echo "Container ONOS não está rodando."
   fi
+  pause
 }
 
 # Função para obter IP do ONOS
@@ -52,6 +59,7 @@ show_controller_ip() {
   else
     echo "IP do controlador ONOS: $CONTROLLER_IP"
   fi
+  pause
 }
 
 # Credenciais REST e SSH (.secrets)
@@ -78,6 +86,7 @@ activate_apps() {
   CONTROLLER_IP=$(get_onos_ip)
   if [[ -z $CONTROLLER_IP ]]; then
     echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
     return
   fi
 
@@ -88,6 +97,7 @@ activate_apps() {
     echo "OK"
   done
   echo "Todas as aplicações ativadas."
+  pause
 }
 
 # Função para abrir Firefox na Web GUI
@@ -95,15 +105,23 @@ open_firefox() {
   CONTROLLER_IP=$(get_onos_ip)
   if [[ -z $CONTROLLER_IP ]]; then
     echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
     return
   fi
 
   echo "Abrindo Firefox na Web GUI do ONOS..."
   firefox "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/ui" &
+  pause
 }
 
 show_gui_link() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando."
+  else
     echo "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/ui"
+  fi
+  pause
 }
 
 # Função para conectar via SSH ao Karaf
@@ -111,6 +129,7 @@ ssh_karaf() {
   CONTROLLER_IP=$(get_onos_ip)
   if [[ -z $CONTROLLER_IP ]]; then
     echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
     return
   fi
 
@@ -120,8 +139,11 @@ ssh_karaf() {
 
 # Menu interativo
 while true; do
+  clear
+  echo "=========================================="
+  echo "       ONOS Controller - Menu        "
+  echo "=========================================="
   echo ""
-  echo "ONOS Controller - Menu"
   echo "1) Iniciar controladora ONOS"
   echo "2) Mostrar IP do controlador ONOS"
   echo "3) Ativar aplicações ONOS (REST API)"
@@ -130,6 +152,7 @@ while true; do
   echo "6) Conectar via SSH ao Karaf"
   echo "7) Parar ONOS"
   echo "q) Sair (ONOS continua ativo)"
+  echo ""
   echo -n "Escolha uma opção: "
   read -r option
 
@@ -139,10 +162,9 @@ while true; do
     3) activate_apps ;;
     4) show_gui_link ;;
     5) open_firefox ;;
-    6) ssh_karaf ;;
+    6) ssh_karaf ;; # sem pause, pq o ssh já toma a tela
     7) stop_onos_container ;;
     q) echo "Saindo..."; exit 0 ;;
-    *) echo "Opção inválida." ;;
+    *) echo "Opção inválida."; pause ;;
   esac
 done
-
