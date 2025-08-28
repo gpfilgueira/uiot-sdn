@@ -20,7 +20,7 @@ start_onos_container() {
 
   if ! docker inspect onos >/dev/null 2>&1; then
     echo "Container ONOS não existe. Criando..."
-    docker run -d -t -p 6653:6653 -p 8181:8181 -p 8101:8101 -p 5005:5005 -p 830:830 --name onos onosproject/onos
+    docker run -d -t -p 6653:6653 -p 8181:8181 -p 8101:8101 -p 5005:5005 -p 830:830 --name onos onosproject/onos:2.7.0
   else
     RUNNING=$(docker inspect -f '{{.State.Running}}' onos 2>/dev/null)
     if [ "$RUNNING" = "true" ]; then
