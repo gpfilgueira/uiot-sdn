@@ -137,6 +137,35 @@ ssh_karaf() {
   ssh -p $SSH_PORT $SSH_USER@$CONTROLLER_IP
 }
 
+# Função para enviar JSON com nomes amigáveis via REST
+apirest_friendlynames_json() {
+    CONTROLLER_IP=$(get_onos_ip)
+    if [[ -z $CONTROLLER_IP ]]; then
+        echo "ONOS não está rodando. Inicie o container primeiro."
+        pause
+        return
+    fi
+
+    if [[ ! -f network-cfg.json ]]; then
+        echo "Você precisa ter um arquivo 'network-cfg.json' no mesmo diretório que este script!"
+        pause
+        return
+    fi
+
+    echo "Enviando network-cfg.json para ONOS via REST API..."
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" -X POST \
+        -H "Content-Type: application/json" \
+        http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration \
+        -d @network-cfg.json)
+
+    if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
+        echo "JSON enviado com sucesso!"
+    else
+        echo "Falha ao enviar JSON. Código HTTP: $RESPONSE"
+    fi
+    pause
+}
+
 # Menu interativo
 while true; do
   clear
@@ -147,10 +176,11 @@ while true; do
   echo "1) Iniciar controladora ONOS"
   echo "2) Mostrar IP do controlador ONOS"
   echo "3) Ativar aplicações ONOS (REST API)"
-  echo "4) Mostrar link da Web GUI"
-  echo "5) Abrir Web GUI no Firefox"
-  echo "6) Conectar via SSH ao Karaf"
-  echo "7) Parar ONOS"
+  echo "4) Enviar network-cfg.json via REST API"
+  echo "5) Mostrar link da Web GUI"
+  echo "6) Abrir Web GUI no Firefox"
+  echo "7) Conectar via SSH ao Karaf"
+  echo "8) Parar ONOS"
   echo "q) Sair (ONOS continua ativo)"
   echo ""
   echo -n "Escolha uma opção: "
@@ -160,10 +190,11 @@ while true; do
     1) start_onos_container ;;
     2) show_controller_ip ;;
     3) activate_apps ;;
-    4) show_gui_link ;;
-    5) open_firefox ;;
-    6) ssh_karaf ;; # sem pause, pq o ssh já toma a tela
-    7) stop_onos_container ;;
+    4) apirest_friendlynames_json;;
+    5) show_gui_link ;;
+    6) open_firefox ;;
+    7) ssh_karaf ;; # sem pause, pq o ssh já toma a tela
+    8) stop_onos_container ;;
     q) echo "Saindo..."; exit 0 ;;
     *) echo "Opção inválida."; pause ;;
   esac
