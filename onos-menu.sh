@@ -125,6 +125,7 @@ show_gui_link() {
 }
 
 # Função para conectar via SSH ao Karaf
+# Função para conectar via SSH ao Karaf
 ssh_karaf() {
   CONTROLLER_IP=$(get_onos_ip)
   if [[ -z $CONTROLLER_IP ]]; then
@@ -134,7 +135,22 @@ ssh_karaf() {
   fi
 
   echo "Conectando via SSH ao Karaf (usuário: $SSH_USER)..."
-  ssh -p $SSH_PORT $SSH_USER@$CONTROLLER_IP
+  echo ""
+
+  # Executa o SSH e captura saída e código de retorno
+  ssh -p $SSH_PORT "$SSH_USER@$CONTROLLER_IP"
+  EXIT_CODE=$?
+
+  if [[ $EXIT_CODE -ne 0 ]]; then
+    echo ""
+    echo "## A conexão SSH falhou (código $EXIT_CODE). ##"
+    echo "Provavelmente é o erro de chave de host."
+    echo ""
+    echo "Mensagem acima contém o comando sugerido pelo SSH para corrigir."
+    echo "Você pode copiá-lo agora antes de retornar ao menu."
+    echo ""
+    read -n 1 -s -r -p "Pressione qualquer tecla para voltar ao menu..."
+  fi
 }
 
 # Função para enviar JSON com nomes amigáveis via REST
@@ -156,7 +172,7 @@ apirest_friendlynames_json() {
     RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" -X POST \
         -H "Content-Type: application/json" \
         http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration \
-        -d @network-cfg.json)
+        -d @localtest-netcfg.json)
 
     if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
         echo "JSON enviado com sucesso!"
@@ -164,6 +180,118 @@ apirest_friendlynames_json() {
         echo "Falha ao enviar JSON. Código HTTP: $RESPONSE"
     fi
     pause
+}
+
+# Função para mostrar hosts atuais no ONOS
+show_onos_hosts() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
+
+  echo "Obtendo lista de hosts registrados no ONOS..."
+  echo ""
+
+  # Usa jq se estiver disponível para formatação
+  if command -v jq >/dev/null 2>&1; then
+    curl -s -u "$USER:$PASS" http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/hosts | jq
+  else
+    curl -s -u "$USER:$PASS" http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/hosts
+  fi
+
+  pause
+}
+
+# Função para listar hosts e bloquear um selecionado
+block_onos_host() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
+
+  echo "Obtendo lista de hosts do ONOS..."
+  HOSTS_JSON=$(curl -s -u "$USER:$PASS" http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/hosts)
+
+  # Verifica se jq está disponível
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Erro: jq é necessário para esta função."
+    pause
+    return
+  fi
+
+  HOST_COUNT=$(echo "$HOSTS_JSON" | jq '.hosts | length')
+  if [[ $HOST_COUNT -eq 0 ]]; then
+    echo "Nenhum host encontrado."
+    pause
+    return
+  fi
+
+  echo ""
+  echo "=== Hosts Detectados ==="
+  for ((i=0; i<HOST_COUNT; i++)); do
+    MAC=$(echo "$HOSTS_JSON" | jq -r ".hosts[$i].mac")
+    IP=$(echo "$HOSTS_JSON" | jq -r ".hosts[$i].ipAddresses[0]")
+    LOC=$(echo "$HOSTS_JSON" | jq -r ".hosts[$i].locations[0].elementId")
+    PORT=$(echo "$HOSTS_JSON" | jq -r ".hosts[$i].locations[0].port")
+    echo "$((i+1))) MAC: $MAC  |  IP: $IP  |  Local: $LOC/$PORT"
+  done
+  echo "========================"
+  echo ""
+
+  read -p "Digite o número do host que deseja BLOQUEAR: " CHOICE
+  if ! [[ $CHOICE =~ ^[0-9]+$ ]] || (( CHOICE < 1 || CHOICE > HOST_COUNT )); then
+    echo "Escolha inválida."
+    pause
+    return
+  fi
+
+  SELECTED_MAC=$(echo "$HOSTS_JSON" | jq -r ".hosts[$((CHOICE-1))].mac")
+  SELECTED_IP=$(echo "$HOSTS_JSON" | jq -r ".hosts[$((CHOICE-1))].ipAddresses[0]")
+  LOCATION_SWITCH=$(echo "$HOSTS_JSON" | jq -r ".hosts[$((CHOICE-1))].locations[0].elementId")
+  LOCATION_PORT=$(echo "$HOSTS_JSON" | jq -r ".hosts[$((CHOICE-1))].locations[0].port")
+
+  echo ""
+  echo "Bloqueando host:"
+  echo "  MAC: $SELECTED_MAC"
+  echo "  IP:  $SELECTED_IP"
+  echo "  Local: $LOCATION_SWITCH/$LOCATION_PORT"
+  echo ""
+
+  # Cria um flow que descarta todos os pacotes do host (por MAC)
+  FLOW_JSON=$(jq -n \
+    --arg switch "$LOCATION_SWITCH" \
+    --arg mac "$SELECTED_MAC" \
+    '{
+      priority: 50000,
+      timeout: 0,
+      isPermanent: true,
+      deviceId: $switch,
+      treatment: { instructions: [] },
+      selector: {
+        criteria: [
+          { type: "ETH_SRC", mac: $mac }
+        ]
+      }
+    }'
+  )
+
+  RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+    -u "$USER:$PASS" \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "$FLOW_JSON" \
+    http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/flows?appId=host-blocker)
+
+  if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
+    echo "✅ Host bloqueado com sucesso!"
+  else
+    echo "❌ Falha ao enviar flow. Código HTTP: $RESPONSE"
+  fi
+  pause
 }
 
 # Menu interativo
@@ -180,6 +308,8 @@ while true; do
   echo "5) Mostrar link da Web GUI"
   echo "6) Abrir Web GUI no Firefox"
   echo "7) Conectar via SSH ao Karaf"
+  echo "9) Mostrar hosts atuais (REST API)"
+  echo "10) Bloquear um host (REST API)"
   echo "8) Parar ONOS"
   echo "q) Sair (ONOS continua ativo)"
   echo ""
@@ -193,8 +323,10 @@ while true; do
     4) apirest_friendlynames_json;;
     5) show_gui_link ;;
     6) open_firefox ;;
-    7) ssh_karaf ;; # sem pause, pq o ssh já toma a tela
+    7) ssh_karaf ;;
     8) stop_onos_container ;;
+    9) show_onos_hosts ;;
+    10) block_onos_host ;;
     q) echo "Saindo..."; exit 0 ;;
     *) echo "Opção inválida."; pause ;;
   esac
