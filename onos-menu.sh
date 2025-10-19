@@ -355,25 +355,131 @@ list_non_core_flows() {
   pause
 }
 
-# Menu interativo (reorganizado)
+# Função para listar todos os flows que não são de core
+list_non_core_flows() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
+
+  echo "Obtendo lista de flows não-core..."
+  echo ""
+
+  FLOW_JSON=$(curl -s -u "$USER:$PASS" http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/flows)
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Erro: jq é necessário para esta função."
+    pause
+    return
+  fi
+
+  NON_CORE=$(echo "$FLOW_JSON" | jq '[.flows[] | select(.appId != "org.onosproject.core")]')
+
+  COUNT=$(echo "$NON_CORE" | jq 'length')
+  if [[ $COUNT -eq 0 ]]; then
+    echo "Nenhum flow não-core encontrado."
+    pause
+    return
+  fi
+
+  echo "=== Flows não-core detectados ==="
+  for ((i=0; i<COUNT; i++)); do
+    ID=$(echo "$NON_CORE" | jq -r ".[$i].id")
+    APP=$(echo "$NON_CORE" | jq -r ".[$i].appId")
+    SWITCH=$(echo "$NON_CORE" | jq -r ".[$i].deviceId")
+    PRIORITY=$(echo "$NON_CORE" | jq -r ".[$i].priority")
+    echo "$((i+1))) ID: $ID  |  App: $APP  |  Switch: $SWITCH  |  Priority: $PRIORITY"
+  done
+  echo "==============================="
+  echo ""
+
+  # Armazena o JSON temporário para possível deleção posterior
+  echo "$NON_CORE" > /tmp/onos_noncore_flows.json
+  pause
+}
+
+# Função para deletar flows não-core selecionados
+delete_non_core_flows() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
+
+  if [[ ! -f /tmp/onos_noncore_flows.json ]]; then
+    echo "Nenhuma lista de flows encontrada. Rode 'Listar flows não-core' antes."
+    pause
+    return
+  fi
+
+  NON_CORE=$(cat /tmp/onos_noncore_flows.json)
+  COUNT=$(echo "$NON_CORE" | jq 'length')
+  if [[ $COUNT -eq 0 ]]; then
+    echo "Nenhum flow não-core listado."
+    pause
+    return
+  fi
+
+  echo "=== Flows não-core ==="
+  for ((i=0; i<COUNT; i++)); do
+    ID=$(echo "$NON_CORE" | jq -r ".[$i].id")
+    SWITCH=$(echo "$NON_CORE" | jq -r ".[$i].deviceId")
+    APP=$(echo "$NON_CORE" | jq -r ".[$i].appId")
+    echo "$((i+1))) ID: $ID  |  App: $APP  |  Switch: $SWITCH"
+  done
+  echo "======================"
+  echo ""
+
+  read -p "Digite os números dos flows que deseja DELETAR (separados por espaço): " -a CHOICES
+  echo ""
+
+  for CHOICE in "${CHOICES[@]}"; do
+    if ! [[ $CHOICE =~ ^[0-9]+$ ]] || (( CHOICE < 1 || CHOICE > COUNT )); then
+      echo "❌ Índice inválido: $CHOICE"
+      continue
+    fi
+
+    ID=$(echo "$NON_CORE" | jq -r ".[$((CHOICE-1))].id")
+    SWITCH=$(echo "$NON_CORE" | jq -r ".[$((CHOICE-1))].deviceId")
+
+    echo -n "Removendo flow ID $ID do switch $SWITCH ... "
+
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+      -u "$USER:$PASS" \
+      -X DELETE \
+      http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/flows/$SWITCH/$ID)
+
+    if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
+      echo "✅ OK"
+    else
+      echo "❌ Falha (HTTP $RESPONSE)"
+    fi
+  done
+
+  pause
+}
+
 while true; do
   clear
   echo "=========================================="
-  echo "        ONOS Controller - Menu"
+  echo "       ONOS Controller - Menu        "
   echo "=========================================="
   echo ""
   echo "1) Iniciar controladora ONOS"
-  echo "2) Parar ONOS"
-  echo "3) Mostrar IP do controlador ONOS"
-  echo "4) Ativar aplicações ONOS (REST API)"
-  echo "5) Enviar network-cfg.json via REST API"
-  echo "6) Mostrar link da Web GUI"
-  echo "7) Abrir Web GUI no Firefox"
-  echo "8) Conectar via SSH ao Karaf"
+  echo "2) Mostrar IP do controlador ONOS"
+  echo "3) Ativar aplicações ONOS (REST API)"
+  echo "4) Enviar network-cfg.json via REST API"
+  echo "5) Mostrar link da Web GUI"
+  echo "6) Abrir Web GUI no Firefox"
+  echo "7) Conectar via SSH ao Karaf"
+  echo "8) Parar ONOS"
   echo "9) Mostrar hosts atuais (REST API)"
   echo "10) Bloquear um host (REST API)"
   echo "11) Listar flows não-core (REST API)"
-  echo ""
+  echo "12) Deletar flows não-core (REST API)"
   echo "q) Sair (ONOS continua ativo)"
   echo ""
   echo -n "Escolha uma opção: "
@@ -381,16 +487,17 @@ while true; do
 
   case $option in
     1) start_onos_container ;;
-    2) stop_onos_container ;;
-    3) show_controller_ip ;;
-    4) activate_apps ;;
-    5) apirest_friendlynames_json ;;
-    6) show_gui_link ;;
-    7) open_firefox ;;
-    8) ssh_karaf ;;
+    2) show_controller_ip ;;
+    3) activate_apps ;;
+    4) apirest_friendlynames_json ;;
+    5) show_gui_link ;;
+    6) open_firefox ;;
+    7) ssh_karaf ;;
+    8) stop_onos_container ;;
     9) show_onos_hosts ;;
     10) block_onos_host ;;
     11) list_non_core_flows ;;
+    12) delete_non_core_flows ;;
     q) echo "Saindo..."; exit 0 ;;
     *) echo "Opção inválida."; pause ;;
   esac
