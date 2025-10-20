@@ -672,6 +672,7 @@ submenu_management() {
     echo "k) Parar ONOS"
     echo "r) Reiniciar ONOS"
     echo "b) Voltar"
+    echo "q) Sair (ONOS continua ativo)"
     echo ""
     read -rp "Escolha: " opt
     case $opt in
@@ -682,6 +683,7 @@ submenu_management() {
       k) stop_onos_container ;;
       r) restart_onos_container ;;
       b) break ;;
+      q) echo "Saindo..."; exit 0 ;;
       *) echo "Opção inválida."; pause ;;
     esac
   done
@@ -700,11 +702,12 @@ submenu_interactions() {
     echo "7) Mostrar link da Web GUI"
     echo "8) Mostrar hosts atuais (REST API)"
     echo "9) Bloquear um host (REST API)"
-    echo "a) Exportar topologia"
-    echo "l) Listar flows não-core (REST API)"
-    echo "d) Deletar flows não-core (REST API)"
-    echo "h) Health-check do ONOS"
+    echo "10) Exportar topologia"
+    echo "11) Listar flows não-core (REST API)"
+    echo "12) Deletar flows não-core (REST API)"
+    echo "13) Health-check do ONOS"
     echo "b) Voltar"
+    echo "q) Sair (ONOS continua ativo)"
     echo ""
     read -rp "Escolha: " opt
     case $opt in
@@ -718,11 +721,12 @@ submenu_interactions() {
       7) show_gui_link ;;
       8) show_onos_hosts ;;
       9) block_onos_host ;;
-      a) export_topology ;;
-      l) list_non_core_flows ;;
-      d) delete_noncore_flows ;;
-      h) check_onos_health ;;
+      10) export_topology ;;
+      11) list_non_core_flows ;;
+      12) delete_noncore_flows ;;
+      13) check_onos_health ;;
       b) break ;;
+      q) echo "Saindo..."; exit 0 ;;
       *) echo "Opção inválida."; pause ;;
     esac
   done
