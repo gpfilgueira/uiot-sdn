@@ -616,9 +616,9 @@ check_onos_health() {
 
   # Exibe status de acordo com o código HTTP
   if [[ "$HTTP_CODE" -eq 200 ]]; then
-    echo -e "${GREEN}🟢 ONOS respondeu (HTTP 200)${RESET}"
+    echo -e "${GREEN}ONOS respondeu (HTTP 200)${RESET}"
   else
-    echo -e "${RED}🔴 ONOS respondeu com erro HTTP $HTTP_CODE${RESET}"
+    echo -e "${RED}ONOS respondeu com erro HTTP $HTTP_CODE${RESET}"
   fi
 
   echo ""
