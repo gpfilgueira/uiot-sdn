@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 
-# ===============================
-#  ONOS Management Script
-#  Foco: clareza, usabilidade e estrutura hierárquica
-# ===============================
+# ============================================================
+# ONOS Controller - Menu reorganizado
+# ============================================================
 
-# === Carrega arquivo .secrets ===
+# Carrega arquivo .secrets
 if [ -f ".secrets" ]; then
     source .secrets
 else
@@ -13,218 +12,525 @@ else
     exit 1
 fi
 
-# === Cores ===
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-CYAN="\033[0;36m"
-BOLD="\033[1m"
-RESET="\033[0m"
-
-# === Funções auxiliares ===
+# Função auxiliar para pausar
 pause() {
-    read -rp "Pressione Enter para continuar..."
+  echo ""
+  read -n 1 -s -r -p "Pressione qualquer tecla para voltar ao menu..."
 }
 
-confirm_action() {
-    read -rp "$1 (s/N): " confirm
-    [[ $confirm == [sS] ]] || return 1
-}
+# Função para iniciar ou criar o container ONOS
+start_onos_container() {
+  echo "Verificando estado do container ONOS..."
 
-check_onos_running() {
-    docker ps --filter "name=onos" --format '{{.Names}}' | grep -q "onos"
-}
-
-show_status() {
-    clear
-    echo -e "${BOLD}==========================================${RESET}"
-    echo -e "${BOLD}   ONOS Management Interface${RESET}"
-    echo -e "${BOLD}==========================================${RESET}"
-    echo
-
-    if check_onos_running; then
-        ONOS_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' onos)
-        echo -e "Status: ${GREEN}RODANDO${RESET}"
-        echo -e "IP: ${CYAN}${ONOS_IP}${RESET}"
+  if ! docker inspect onos >/dev/null 2>&1; then
+    echo "Container ONOS não existe. Criando..."
+    docker run -d -t -p 6653:6653 -p 8181:8181 -p 8101:8101 -p 5005:5005 -p 9876:9876 -p 830:830 --name onos onosproject/onos:2.7-latest
+  else
+    RUNNING=$(docker inspect -f '{{.State.Running}}' onos 2>/dev/null)
+    if [ "$RUNNING" = "true" ]; then
+      echo "Container ONOS já está rodando."
     else
-        echo -e "Status: ${RED}PARADO${RESET}"
-        echo -e "IP: ${YELLOW}N/D${RESET}"
+      echo "Container ONOS existe mas está parado. Iniciando..."
+      docker start onos >/dev/null
+      echo "Container ONOS iniciado."
     fi
-
-    echo -e "Containers ativos: $(docker ps -q | wc -l)"
-    echo
+  fi
+  pause
 }
 
-# === Funções principais ===
-
-start_onos() {
-    if check_onos_running; then
-        echo -e "${YELLOW}O ONOS já está em execução.${RESET}"
-        return
-    fi
-    echo -e "${CYAN}Iniciando o container ONOS...${RESET}"
-    docker run -d --name onos --net=onos-net --ip 172.18.0.2 onosproject/onos
-    echo -e "${GREEN}ONOS iniciado com sucesso.${RESET}"
+# Função para parar o container ONOS com confirmação
+stop_onos_container() {
+  echo ""
+  read -p "Tem certeza que deseja parar o ONOS? (s/N): " CONFIRM
+  case "$CONFIRM" in
+    [sS]|[sS][iI][mM])
+      echo "Parando container ONOS..."
+      if docker ps -q -f name=onos >/dev/null; then
+        docker stop onos >/dev/null
+        echo "Container ONOS parado."
+      else
+        echo "Container ONOS não está rodando."
+      fi
+      ;;
+    *)
+      echo "Operação cancelada."
+      ;;
+  esac
+  pause
 }
 
-stop_onos() {
-    if ! check_onos_running; then
-        echo -e "${YELLOW}O ONOS não está rodando.${RESET}"
-        return
-    fi
-    confirm_action "Tem certeza de que deseja parar o ONOS?" || return
-    echo -e "${CYAN}Parando o container ONOS...${RESET}"
-    docker stop onos && docker rm onos
-    echo -e "${GREEN}ONOS parado e removido.${RESET}"
+# Função para obter IP do ONOS
+get_onos_ip() {
+  docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' onos 2>/dev/null
 }
 
-show_ip() {
-    if check_onos_running; then
-        docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' onos
-    else
-        echo -e "${YELLOW}ONOS não está em execução.${RESET}"
-    fi
+# Função para mostrar o IP do container ONOS
+show_controller_ip() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando ou IP não encontrado."
+  else
+    echo "IP do controlador ONOS: $CONTROLLER_IP"
+  fi
+  pause
 }
 
-open_gui() {
-    if check_onos_running; then
-        xdg-open "http://172.18.0.2:8181/onos/ui" >/dev/null 2>&1 &
-        echo -e "${GREEN}Abrindo interface web do ONOS...${RESET}"
-    else
-        echo -e "${YELLOW}ONOS não está em execução.${RESET}"
-    fi
-}
+# Credenciais REST e SSH (.secrets)
+USER="$ONOS_USER"
+PASS="$ONOS_PASS"
+SSH_USER="$ONOS_SSH_USER"
+SSH_PASS="$ONOS_SSH_PASS"
 
-connect_ssh() {
-    if check_onos_running; then
-        docker exec -it onos /bin/bash -c "ssh -p 8101 karaf@localhost"
-    else
-        echo -e "${YELLOW}ONOS não está em execução.${RESET}"
-    fi
-}
+WEB_GUI_PORT=8181
+SSH_PORT=8101
 
+# Lista de aplicações para ativar via REST
+apps=(
+  "org.onosproject.openflow-message"
+  "org.onosproject.ofagent"
+  "org.onosproject.openflow-base"
+  "org.onosproject.openflow"
+  "org.onosproject.workflow.ofoverlay"
+  "org.onosproject.fwd"
+)
+
+# Função para ativar apps via REST API
 activate_apps() {
-    echo -e "${CYAN}Ativando aplicações padrão...${RESET}"
-    curl -u "$ONOS_USER:$ONOS_PASS" -X POST http://172.18.0.2:8181/onos/v1/applications/org.onosproject.fwd/active
-    curl -u "$ONOS_USER:$ONOS_PASS" -X POST http://172.18.0.2:8181/onos/v1/applications/org.onosproject.openflow/active
-    echo -e "${GREEN}Aplicações ativadas.${RESET}"
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
+
+  echo "Ativando aplicações ONOS via REST API..."
+  for app in "${apps[@]}"; do
+    echo -n "Ativando $app ... "
+    curl -s -X POST -u $USER:$PASS http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/applications/$app/active >/dev/null
+    echo "OK"
+  done
+  echo "Todas as aplicações ativadas."
+  pause
 }
 
-send_network_cfg() {
-    if [ -f "network-cfg.json" ]; then
-        echo -e "${CYAN}Enviando network-cfg.json...${RESET}"
-        curl -u "$ONOS_USER:$ONOS_PASS" -X POST \
-            -H "Content-Type: application/json" \
-            http://172.18.0.2:8181/onos/v1/network/configuration/ \
-            -d @network-cfg.json
-        echo -e "${GREEN}Configuração enviada.${RESET}"
-    else
-        echo -e "${RED}Arquivo network-cfg.json não encontrado.${RESET}"
+# Função para abrir Firefox na Web GUI
+open_firefox() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
+
+  echo "Abrindo Firefox na Web GUI do ONOS..."
+  firefox "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/ui" &
+  pause
+}
+
+show_gui_link() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando."
+  else
+    echo "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/ui"
+  fi
+  pause
+}
+
+# Função para conectar via SSH ao Karaf
+ssh_karaf() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
+
+  echo "Conectando via SSH ao Karaf (usuário: $SSH_USER)..."
+  echo ""
+
+  # Executa o SSH e captura saída e código de retorno
+  ssh -p $SSH_PORT "$SSH_USER@$CONTROLLER_IP"
+  EXIT_CODE=$?
+
+  if [[ $EXIT_CODE -ne 0 ]]; then
+    echo ""
+    echo "## A conexão SSH falhou (código $EXIT_CODE). ##"
+    echo "Provavelmente é o erro de chave de host."
+    echo ""
+    echo "Mensagem acima contém o comando sugerido pelo SSH para corrigir."
+    echo "Você pode copiá-lo agora antes de retornar ao menu."
+    echo ""
+    read -n 1 -s -r -p "Pressione qualquer tecla para voltar ao menu..."
+  fi
+}
+
+# Função para enviar JSON com nomes amigáveis via REST
+apirest_friendlynames_json() {
+    CONTROLLER_IP=$(get_onos_ip)
+    if [[ -z $CONTROLLER_IP ]]; then
+        echo "ONOS não está rodando. Inicie o container primeiro."
+        pause
+        return
     fi
-}
 
-show_hosts() {
-    curl -s -u "$ONOS_USER:$ONOS_PASS" http://172.18.0.2:8181/onos/v1/hosts | jq .
-}
+    if [[ ! -f network-cfg.json ]]; then
+        echo "Você precisa ter um arquivo 'network-cfg.json' no mesmo diretório que este script!"
+        pause
+        return
+    fi
 
-block_host() {
-    read -rp "Digite o MAC ou IP do host a bloquear: " TARGET
-    echo -e "${CYAN}Bloqueando ${TARGET}...${RESET}"
-    curl -u "$ONOS_USER:$ONOS_PASS" -X POST \
-        http://172.18.0.2:8181/onos/v1/flows/org.onosproject.cli \
+    echo "Enviando network-cfg.json para ONOS via REST API..."
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" -X POST \
         -H "Content-Type: application/json" \
-        -d "{\"priority\":40000,\"timeout\":0,\"isPermanent\":true,\"deviceId\":\"of:0000000000000001\",\"treatment\":{},\"selector\":{\"criteria\":[{\"type\":\"ETH_SRC\",\"mac\":\"${TARGET}\"}]}}"
-    echo -e "${GREEN}Host bloqueado.${RESET}"
+        http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration \
+        -d @localtest-netcfg.json)
+
+    if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
+        echo "JSON enviado com sucesso!"
+    else
+        echo "Falha ao enviar JSON. Código HTTP: $RESPONSE"
+    fi
+    pause
 }
 
-list_noncore_flows() {
-    echo -e "${CYAN}Listando flows não-core...${RESET}"
-    curl -s -u "$ONOS_USER:$ONOS_PASS" http://172.18.0.2:8181/onos/v1/flows | jq '.flows[] | select(.appId != "org.onosproject.core")'
+# Função para mostrar hosts atuais no ONOS
+show_onos_hosts() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
+
+  echo "Obtendo lista de hosts registrados no ONOS..."
+  echo ""
+
+  # Usa jq se estiver disponível para formatação
+  if command -v jq >/dev/null 2>&1; then
+    curl -s -u "$USER:$PASS" http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/hosts | jq
+  else
+    curl -s -u "$USER:$PASS" http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/hosts
+  fi
+
+  pause
 }
 
-delete_noncore_flows() {
-    confirm_action "Deseja realmente apagar todos os flows não-core?" || return
-    echo -e "${CYAN}Apagando flows não-core...${RESET}"
-    curl -s -u "$ONOS_USER:$ONOS_PASS" http://172.18.0.2:8181/onos/v1/flows | \
-        jq -r '.flows[] | select(.appId != "org.onosproject.core") | .id' | \
-        while read -r id; do
-            curl -u "$ONOS_USER:$ONOS_PASS" -X DELETE "http://172.18.0.2:8181/onos/v1/flows/$id"
-        done
-    echo -e "${GREEN}Flows não-core removidos.${RESET}"
+# Função para listar hosts e bloquear um selecionado
+block_onos_host() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
+
+  echo "Obtendo lista de hosts do ONOS..."
+  HOSTS_JSON=$(curl -s -u "$USER:$PASS" http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/hosts)
+
+  # Verifica se jq está instalado
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Erro: jq é necessário para esta função."
+    pause
+    return
+  fi
+
+  HOST_COUNT=$(echo "$HOSTS_JSON" | jq '.hosts | length')
+  if [[ $HOST_COUNT -eq 0 ]]; then
+    echo "Nenhum host encontrado."
+    pause
+    return
+  fi
+
+  echo ""
+  echo "=== Hosts Detectados ==="
+  for ((i=0; i<HOST_COUNT; i++)); do
+    MAC=$(echo "$HOSTS_JSON" | jq -r ".hosts[$i].mac")
+    IP=$(echo "$HOSTS_JSON" | jq -r ".hosts[$i].ipAddresses[0]")
+    LOC=$(echo "$HOSTS_JSON" | jq -r ".hosts[$i].locations[0].elementId")
+    PORT=$(echo "$HOSTS_JSON" | jq -r ".hosts[$i].locations[0].port")
+    echo "$((i+1))) MAC: $MAC  |  IP: $IP  |  Local: $LOC/$PORT"
+  done
+  echo "========================"
+  echo ""
+
+  read -p "Digite o número do host que deseja BLOQUEAR: " CHOICE
+  if ! [[ $CHOICE =~ ^[0-9]+$ ]] || (( CHOICE < 1 || CHOICE > HOST_COUNT )); then
+    echo "Escolha inválida."
+    pause
+    return
+  fi
+
+  SELECTED_MAC=$(echo "$HOSTS_JSON" | jq -r ".hosts[$((CHOICE-1))].mac")
+  SELECTED_IP=$(echo "$HOSTS_JSON" | jq -r ".hosts[$((CHOICE-1))].ipAddresses[0]")
+  LOCATION_SWITCH=$(echo "$HOSTS_JSON" | jq -r ".hosts[$((CHOICE-1))].locations[0].elementId")
+  LOCATION_PORT=$(echo "$HOSTS_JSON" | jq -r ".hosts[$((CHOICE-1))].locations[0].port")
+
+  echo ""
+  echo "Bloqueando host:"
+  echo "  MAC: $SELECTED_MAC"
+  echo "  IP:  $SELECTED_IP"
+  echo "  Local: $LOCATION_SWITCH/$LOCATION_PORT"
+  echo ""
+
+  read -p "Digite o VLAN ID (ou pressione Enter para ignorar): " VLAN_ID
+
+  # Monta o JSON do fluxo
+  if [[ -n $VLAN_ID ]]; then
+    FLOW_JSON=$(jq -n \
+      --arg switch "$LOCATION_SWITCH" \
+      --arg mac "$SELECTED_MAC" \
+      --arg vlan "$VLAN_ID" \
+      '{
+        priority: 64000,
+        isPermanent: true,
+        deviceId: $switch,
+        selector: {
+          criteria: [
+            { type: "ETH_DST", mac: $mac },
+            { type: "VLAN_VID", vlanId: ($vlan | tonumber) }
+          ]
+        },
+        treatment: { instructions: [] }
+      }'
+    )
+  else
+    FLOW_JSON=$(jq -n \
+      --arg switch "$LOCATION_SWITCH" \
+      --arg mac "$SELECTED_MAC" \
+      '{
+        priority: 64000,
+        isPermanent: true,
+        deviceId: $switch,
+        selector: {
+          criteria: [
+            { type: "ETH_DST", mac: $mac }
+          ]
+        },
+        treatment: { instructions: [] }
+      }'
+    )
+  fi
+
+  # Envia o flow para o endpoint correto (sem ?appId=)
+  RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+    -u "$USER:$PASS" \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "$FLOW_JSON" \
+    http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/flows/$LOCATION_SWITCH)
+
+  if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
+    echo "Host bloqueado com sucesso!"
+  else
+    echo "Falha ao enviar flow. Código HTTP: $RESPONSE"
+  fi
+
+  pause
 }
 
-# === Menus ===
+# Função para listar todos os flows que não são de core (versão detalhada)
+list_non_core_flows() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
 
-menu_main() {
-    while true; do
-        show_status
-        echo -e "${BOLD}Menu principal:${RESET}"
-        echo "1) Gerenciamento ONOS"
-        echo "2) Interações REST / Hosts / Flows"
-        echo "q) Sair"
-        echo
-        read -rp "Escolha uma opção: " opt
+  echo "Obtendo lista de flows não-core..."
+  echo ""
 
-        case $opt in
-            1) menu_gerenciamento ;;
-            2) menu_interacoes ;;
-            q|Q) echo "Saindo..."; exit 0 ;;
-            *) echo -e "${RED}Opção inválida.${RESET}"; sleep 1 ;;
-        esac
-    done
+  FLOW_JSON=$(curl -s -u "$USER:$PASS" http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/flows)
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Erro: jq é necessário para esta função."
+    pause
+    return
+  fi
+
+  NON_CORE=$(echo "$FLOW_JSON" | jq '[.flows[] | select(.appId != "org.onosproject.core")]')
+
+  COUNT=$(echo "$NON_CORE" | jq 'length')
+  if [[ $COUNT -eq 0 ]]; then
+    echo "Nenhum flow não-core encontrado."
+    pause
+    return
+  fi
+
+  echo "=== Flows não-core detectados ==="
+  for ((i=0; i<COUNT; i++)); do
+    ID=$(echo "$NON_CORE" | jq -r ".[$i].id")
+    APP=$(echo "$NON_CORE" | jq -r ".[$i].appId")
+    SWITCH=$(echo "$NON_CORE" | jq -r ".[$i].deviceId")
+    PRIORITY=$(echo "$NON_CORE" | jq -r ".[$i].priority")
+    echo "$((i+1))) ID: $ID  |  App: $APP  |  Switch: $SWITCH  |  Priority: $PRIORITY"
+  done
+  echo "==============================="
+  echo ""
+
+  # Armazena o JSON temporário para possível deleção posterior
+  echo "$NON_CORE" > /tmp/onos_noncore_flows.json
+  pause
 }
 
-menu_gerenciamento() {
-    while true; do
-        show_status
-        echo -e "${BOLD}Gerenciamento do ONOS:${RESET}"
-        echo "1) Iniciar ONOS"
-        echo "2) Parar ONOS"
-        echo "3) Mostrar IP"
-        echo "4) Abrir Web GUI"
-        echo "5) Conectar via SSH (Karaf)"
-        echo "b) Voltar"
-        echo
-        read -rp "Escolha uma opção: " opt
+# Função para deletar flows não-core selecionados
+delete_non_core_flows() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Inicie o container primeiro."
+    pause
+    return
+  fi
 
-        case $opt in
-            1) start_onos; pause ;;
-            2) stop_onos; pause ;;
-            3) show_ip; pause ;;
-            4) open_gui; pause ;;
-            5) connect_ssh; pause ;;
-            b|B) break ;;
-            *) echo -e "${RED}Opção inválida.${RESET}"; sleep 1 ;;
-        esac
-    done
+  if [[ ! -f /tmp/onos_noncore_flows.json ]]; then
+    echo "Nenhuma lista de flows encontrada. Rode 'Listar flows não-core' antes."
+    pause
+    return
+  fi
+
+  NON_CORE=$(cat /tmp/onos_noncore_flows.json)
+  COUNT=$(echo "$NON_CORE" | jq 'length')
+  if [[ $COUNT -eq 0 ]]; then
+    echo "Nenhum flow não-core listado."
+    pause
+    return
+  fi
+
+  echo "=== Flows não-core ==="
+  for ((i=0; i<COUNT; i++)); do
+    ID=$(echo "$NON_CORE" | jq -r ".[$i].id")
+    SWITCH=$(echo "$NON_CORE" | jq -r ".[$i].deviceId")
+    APP=$(echo "$NON_CORE" | jq -r ".[$i].appId")
+    echo "$((i+1))) ID: $ID  |  App: $APP  |  Switch: $SWITCH"
+  done
+  echo "======================"
+  echo ""
+
+  read -p "Digite os números dos flows que deseja DELETAR (separados por espaço): " -a CHOICES
+  echo ""
+
+  for CHOICE in "${CHOICES[@]}"; do
+    if ! [[ $CHOICE =~ ^[0-9]+$ ]] || (( CHOICE < 1 || CHOICE > COUNT )); then
+      echo "Índice inválido: $CHOICE"
+      continue
+    fi
+
+    ID=$(echo "$NON_CORE" | jq -r ".[$((CHOICE-1))].id")
+    SWITCH=$(echo "$NON_CORE" | jq -r ".[$((CHOICE-1))].deviceId")
+
+    echo -n "Removendo flow ID $ID do switch $SWITCH ... "
+
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+      -u "$USER:$PASS" \
+      -X DELETE \
+      http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/flows/$SWITCH/$ID)
+
+    if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
+      echo "OK"
+    else
+      echo "Falha (HTTP $RESPONSE)"
+    fi
+  done
+
+  pause
 }
 
-menu_interacoes() {
-    while true; do
-        show_status
-        echo -e "${BOLD}Interações e REST API:${RESET}"
-        echo "1) Ativar Aplicações ONOS"
-        echo "2) Enviar network-cfg.json"
-        echo "3) Mostrar Hosts"
-        echo "4) Bloquear Host"
-        echo "5) Listar Flows não-core"
-        echo "6) Deletar Flows não-core"
-        echo "b) Voltar"
-        echo
-        read -rp "Escolha uma opção: " opt
-
-        case $opt in
-            1) activate_apps; pause ;;
-            2) send_network_cfg; pause ;;
-            3) show_hosts; pause ;;
-            4) block_host; pause ;;
-            5) list_noncore_flows; pause ;;
-            6) delete_noncore_flows; pause ;;
-            b|B) break ;;
-            *) echo -e "${RED}Opção inválida.${RESET}"; sleep 1 ;;
-        esac
-    done
+# ---------------------------
+# Cabeçalho / status
+# ---------------------------
+show_status_header() {
+  clear
+  echo "=========================================="
+  echo "       ONOS Controller - Menu            "
+  echo "=========================================="
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "Status: PARADO    | IP: N/D"
+  else
+    # tenta detectar se o container está rodando
+    RUNNING=$(docker inspect -f '{{.State.Running}}' onos 2>/dev/null)
+    if [[ "$RUNNING" = "true" ]]; then
+      echo "Status: RODANDO   | IP: $CONTROLLER_IP"
+    else
+      echo "Status: PARADO    | IP: N/D"
+    fi
+  fi
+  echo "------------------------------------------"
+  echo ""
 }
 
-# === Execução ===
-menu_main
+# ---------------------------
+# Submenus
+# ---------------------------
+
+submenu_management() {
+  while true; do
+    show_status_header
+    echo "GERENCIAMENTO ONOS"
+    echo "1) Iniciar controladora ONOS"
+    echo "2) Mostrar IP do controlador ONOS"
+    echo "3) Abrir Web GUI no Firefox"
+    echo "4) Conectar via SSH ao Karaf"
+    echo "k) Parar ONOS"
+    echo "b) Voltar"
+    echo ""
+    read -rp "Escolha: " opt
+    case $opt in
+      1) start_onos_container ;;
+      2) show_controller_ip ;;
+      3) open_firefox ;;
+      4) ssh_karaf ;;
+      k) stop_onos_container ;;
+      b) break ;;
+      *) echo "Opção inválida."; pause ;;
+    esac
+  done
+}
+
+submenu_interactions() {
+  while true; do
+    show_status_header
+    echo "INTERAÇÕES REST / HOSTS / FLOWS"
+    echo "1) Ativar aplicações ONOS (REST API)"
+    echo "2) Enviar network-cfg.json via REST API"
+    echo "3) Mostrar link da Web GUI"
+    echo "4) Mostrar hosts atuais (REST API)"
+    echo "5) Bloquear um host (REST API)"
+    echo "6) Listar flows não-core (REST API)"
+    echo "7) Deletar flows não-core (REST API)"
+    echo "b) Voltar"
+    echo ""
+    read -rp "Escolha: " opt
+    case $opt in
+      1) activate_apps ;;
+      2) apirest_friendlynames_json ;;
+      3) show_gui_link ;;
+      4) show_onos_hosts ;;
+      5) block_onos_host ;;
+      6) list_non_core_flows ;;
+      7) delete_non_core_flows ;;
+      b) break ;;
+      *) echo "Opção inválida."; pause ;;
+    esac
+  done
+}
+
+# ---------------------------
+# Menu principal
+# ---------------------------
+while true; do
+  show_status_header
+  echo "1) Gerenciamento do ONOS"
+  echo "2) Interações REST / Hosts / Flows"
+  echo "q) Sair (ONOS continua ativo)"
+  echo ""
+  read -rp "Escolha uma opção: " option
+
+  case $option in
+    1) submenu_management ;;
+    2) submenu_interactions ;;
+    q) echo "Saindo..."; exit 0 ;;
+    *) echo "Opção inválida."; pause ;;
+  esac
+done
