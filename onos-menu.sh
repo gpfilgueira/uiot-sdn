@@ -248,10 +248,10 @@ apirest_friendlynames_json() {
     fi
 
     echo "Enviando network-cfg.json para ONOS via REST API..."
-    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" -X POST \
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -u onos:rocks -X POST \
         -H "Content-Type: application/json" \
-        http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration \
-        -d @localtest-netcfg.json)
+        http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration/ \
+        -d @network-cfg.json)
 
     if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
         echo "JSON enviado com sucesso!"
@@ -259,6 +259,7 @@ apirest_friendlynames_json() {
     else
         echo "Falha ao enviar JSON. Código HTTP: $RESPONSE"
     fi
+
     pause
 }
 
