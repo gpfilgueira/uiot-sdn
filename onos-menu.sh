@@ -603,27 +603,42 @@ check_onos_health() {
   echo -e "${BLUE}Verificando integridade do ONOS em $CONTROLLER_IP...${RESET}"
   echo ""
 
-  # Tenta endpoint /system/health
+  # Primeiro tenta o endpoint /system/health
   RESP=$(curl -s -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system/health")
 
-  if [[ -n "$RESP" ]]; then
-    if command -v jq >/dev/null 2>&1; then
-      echo "$RESP" | jq
-    else
-      echo "$RESP"
-    fi
-    log_action "Checou health do ONOS"
-  else
-    # Fallback: tenta /system
-    STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system")
-    echo ""
-    echo -e "${YELLOW}Endpoint /system/health indisponível.${RESET}"
-    echo -e "Código HTTP do sistema: ${CYAN}$STATUS${RESET}"
-    log_action "Checou system status do ONOS (HTTP $STATUS)"
+  # Se resposta contiver 404, ignora e usa fallback
+  if echo "$RESP" | grep -q '"code": 404'; then
+    echo -e "${YELLOW}Endpoint /system/health indisponível. Usando fallback /system...${RESET}"
+    RESP=$(curl -s -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system")
   fi
 
+  if [[ -z "$RESP" ]]; then
+    echo -e "${RED}Falha ao obter resposta da API.${RESET}"
+    log_action "Falha ao checar health do ONOS"
+    pause
+    return 1
+  fi
+
+  # Exibe resposta formatada
+  if command -v jq >/dev/null 2>&1; then
+    echo "$RESP" | jq
+  else
+    echo "$RESP"
+  fi
+
+  # Interpreta campo 'healthy' se existir
+  HEALTH=$(echo "$RESP" | grep -o '"healthy":[^,]*' | cut -d':' -f2 | tr -d ' ')
   echo ""
-  echo -e "${GREEN}Health check concluído.${RESET}"
+  if [[ "$HEALTH" == "true" ]]; then
+    echo -e "${GREEN}ONOS saudável${RESET}"
+  elif [[ "$HEALTH" == "false" ]]; then
+    echo -e "${RED}ONOS reporta falha${RESET}"
+  else
+    echo -e "${YELLOW}Estado de saúde não informado.${RESET}"
+  fi
+
+  log_action "Checou health do ONOS"
+  echo ""
   pause
   return 0
 }
