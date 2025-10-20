@@ -603,41 +603,36 @@ check_onos_health() {
   echo -e "${BLUE}Verificando integridade do ONOS em $CONTROLLER_IP...${RESET}"
   echo ""
 
-  # Primeiro tenta o endpoint /system/health
-  RESP=$(curl -s -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system/health")
+  # Tenta endpoint /system/health e guarda o código HTTP
+  HTTP_CODE=$(curl -s -o /tmp/onos_health.json -w "%{http_code}" \
+    -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system/health")
 
-  # Se resposta contiver 404, ignora e usa fallback
-  if echo "$RESP" | grep -q '"code": 404'; then
-    echo -e "${YELLOW}Endpoint /system/health indisponível. Usando fallback /system...${RESET}"
-    RESP=$(curl -s -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system")
+  # Se for 404 ou vazio, tenta fallback /system
+  if [[ "$HTTP_CODE" -eq 404 || "$HTTP_CODE" -eq 0 ]]; then
+    HTTP_CODE=$(curl -s -o /tmp/onos_health.json -w "%{http_code}" \
+      -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system")
+    echo -e "${YELLOW}Endpoint /system/health indisponível, usando /system...${RESET}"
   fi
 
-  if [[ -z "$RESP" ]]; then
-    echo -e "${RED}Falha ao obter resposta da API.${RESET}"
-    log_action "Falha ao checar health do ONOS"
-    pause
-    return 1
-  fi
-
-  # Exibe resposta formatada
-  if command -v jq >/dev/null 2>&1; then
-    echo "$RESP" | jq
+  # Exibe status de acordo com o código HTTP
+  if [[ "$HTTP_CODE" -eq 200 ]]; then
+    echo -e "${GREEN}🟢 ONOS respondeu (HTTP 200)${RESET}"
   else
-    echo "$RESP"
+    echo -e "${RED}🔴 ONOS respondeu com erro HTTP $HTTP_CODE${RESET}"
   fi
 
-  # Interpreta campo 'healthy' se existir
-  HEALTH=$(echo "$RESP" | grep -o '"healthy":[^,]*' | cut -d':' -f2 | tr -d ' ')
   echo ""
-  if [[ "$HEALTH" == "true" ]]; then
-    echo -e "${GREEN}ONOS saudável${RESET}"
-  elif [[ "$HEALTH" == "false" ]]; then
-    echo -e "${RED}ONOS reporta falha${RESET}"
-  else
-    echo -e "${YELLOW}Estado de saúde não informado.${RESET}"
+
+  # Exibe conteúdo formatado se houver resposta válida
+  if [[ -s /tmp/onos_health.json ]]; then
+    if command -v jq >/dev/null 2>&1; then
+      jq . /tmp/onos_health.json
+    else
+      cat /tmp/onos_health.json
+    fi
   fi
 
-  log_action "Checou health do ONOS"
+  log_action "Checou health do ONOS (HTTP $HTTP_CODE)"
   echo ""
   pause
   return 0
