@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# ============================================================
-# ONOS Controller - Menu reorganizado (versão ampliada)
-# ============================================================
+# ===============
+# ONOS Controller
+# ===============
 
 # Carrega arquivo .secrets
 if [ -f ".secrets" ]; then
@@ -21,9 +21,9 @@ YELLOW='\033[1;33m'
 CYAN='\033[1;36m'
 RESET='\033[0m'
 
-# ---------------------------
+# ------------
 # Log de ações
-# ---------------------------
+# ------------
 LOGFILE="onos-actions.log"
 log_action() {
   echo "$(date '+%Y-%m-%d %H:%M:%S') | $(whoami) | $1" >> "$LOGFILE"
@@ -105,7 +105,7 @@ get_onos_ip() {
   docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' onos 2>/dev/null
 }
 
-# Barra de status reduzida (chamada em cabeçalho)
+# Barra de status
 show_status_header() {
   clear
   echo "=========================================="
@@ -126,9 +126,9 @@ show_status_header() {
   echo ""
 }
 
-# ---------------------------
-# Submenus e funções existentes (mantive tudo como antes)
-# ---------------------------
+# -----------------------------
+# Submenus e funções existentes
+# -----------------------------
 
 # Função para mostrar o IP do container ONOS
 show_controller_ip() {
@@ -230,37 +230,6 @@ ssh_karaf() {
     echo ""
     read -n 1 -s -r -p "Pressione qualquer tecla para voltar ao menu..."
   fi
-}
-
-# Função para enviar JSON com nomes amigáveis via REST
-apirest_friendlynames_json() {
-    CONTROLLER_IP=$(get_onos_ip)
-    if [[ -z $CONTROLLER_IP ]]; then
-        echo "ONOS não está rodando. Inicie o container primeiro."
-        pause
-        return
-    fi
-
-    if [[ ! -f network-cfg.json ]]; then
-        echo "Você precisa ter um arquivo 'network-cfg.json' no mesmo diretório que este script!"
-        pause
-        return
-    fi
-
-    echo "Enviando network-cfg.json para ONOS via REST API..."
-    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -u onos:rocks -X POST \
-        -H "Content-Type: application/json" \
-        http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration/ \
-        -d @network-cfg.json)
-
-    if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
-        echo "JSON enviado com sucesso!"
-        log_action "Enviou network-cfg.json"
-    else
-        echo "Falha ao enviar JSON. Código HTTP: $RESPONSE"
-    fi
-
-    pause
 }
 
 # Função para mostrar hosts atuais no ONOS
@@ -381,7 +350,7 @@ block_onos_host() {
     )
   fi
 
-  # Envia o flow para o endpoint correto (sem ?appId=)
+  # Envia o flow para o endpoint
   RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
     -u "$USER:$PASS" \
     -X POST \
@@ -481,10 +450,41 @@ delete_noncore_flows() {
 }
 
 # ---------------------------
-# Novas funções solicitadas
+# Funções de netcfg
 # ---------------------------
 
-# Backup do netcfg (salva em arquivo timestamp)
+# Função para enviar netcfg JSON via api REST
+send_netcfg() {
+    CONTROLLER_IP=$(get_onos_ip)
+    if [[ -z $CONTROLLER_IP ]]; then
+        echo "ONOS não está rodando. Inicie o container primeiro."
+        pause
+        return
+    fi
+
+    if [[ ! -f network-cfg.json ]]; then
+        echo "Você precisa ter um arquivo 'network-cfg.json' no mesmo diretório que este script!"
+        pause
+        return
+    fi
+
+    echo "Enviando network-cfg.json para ONOS via REST API..."
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -u onos:rocks -X POST \
+        -H "Content-Type: application/json" \
+        http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration/ \
+        -d @network-cfg.json)
+
+    if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
+        echo "JSON enviado com sucesso!"
+        log_action "Enviou network-cfg.json"
+    else
+        echo "Falha ao enviar JSON. Código HTTP: $RESPONSE"
+    fi
+
+    pause
+}
+
+# Backup do netcfg (salva em arquivo de backup)
 backup_netcfg() {
   CONTROLLER_IP=$(get_onos_ip)
   if [[ -z $CONTROLLER_IP ]]; then
@@ -532,7 +532,7 @@ restore_netcfg() {
   fi
 }
 
-# Mostrar netcfg (função pedida anteriormente)
+# Mostra netcfg
 show_netcfg() {
     CONTROLLER_IP=$(get_onos_ip)
     if [[ -z $CONTROLLER_IP ]]; then
@@ -592,7 +592,7 @@ delete_netcfg() {
     pause
 }
 
-# Health check do ONOS (com pausa e fallback elegante)
+# Health check do ONOS
 check_onos_health() {
   CONTROLLER_IP=$(get_onos_ip)
   if [[ -z $CONTROLLER_IP ]]; then
@@ -659,7 +659,7 @@ export_topology() {
 }
 
 # ---------------------------
-# Submenus (mantidos; adicionei entradas onde apropriado)
+# Submenus
 # ---------------------------
 
 submenu_management() {
@@ -713,7 +713,7 @@ submenu_interactions() {
     read -rp "Escolha: " opt
     case $opt in
       1) activate_apps ;;
-      2) apirest_friendlynames_json ;;
+      2) send_netcfg ;;
       3) show_netcfg ;;
       4) delete_netcfg ;;
       5) 
