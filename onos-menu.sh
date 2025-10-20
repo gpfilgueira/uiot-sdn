@@ -2,9 +2,6 @@
 
 # ============================================================
 # ONOS Controller - Menu reorganizado (versão ampliada)
-# Inclui: cores, barra de status, backup/restore netcfg,
-# healthcheck, export de topologia, quick-restart, logging
-# e modo "sem menu" via flags.
 # ============================================================
 
 # Carrega arquivo .secrets
@@ -594,28 +591,40 @@ delete_netcfg() {
     pause
 }
 
-# Health check do ONOS
+# Health check do ONOS (com pausa e fallback elegante)
 check_onos_health() {
   CONTROLLER_IP=$(get_onos_ip)
   if [[ -z $CONTROLLER_IP ]]; then
-    echo "ONOS offline ou IP não encontrado."
+    echo -e "${RED}ONOS offline ou IP não encontrado.${RESET}"
+    pause
     return 1
   fi
 
-  # Tenta endpoint de health. Se não existir, tenta um GET simples para /system
-  if command -v jq >/dev/null 2>&1; then
-    RESP=$(curl -s -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system/health")
-    if [[ -n "$RESP" ]]; then
+  echo -e "${BLUE}Verificando integridade do ONOS em $CONTROLLER_IP...${RESET}"
+  echo ""
+
+  # Tenta endpoint /system/health
+  RESP=$(curl -s -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system/health")
+
+  if [[ -n "$RESP" ]]; then
+    if command -v jq >/dev/null 2>&1; then
       echo "$RESP" | jq
-      log_action "Checou health do ONOS"
-      return 0
+    else
+      echo "$RESP"
     fi
+    log_action "Checou health do ONOS"
+  else
+    # Fallback: tenta /system
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system")
+    echo ""
+    echo -e "${YELLOW}Endpoint /system/health indisponível.${RESET}"
+    echo -e "Código HTTP do sistema: ${CYAN}$STATUS${RESET}"
+    log_action "Checou system status do ONOS (HTTP $STATUS)"
   fi
 
-  # fallback simples
-  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system")
-  echo "Código HTTP do sistema: $STATUS"
-  log_action "Checou system status do ONOS (HTTP $STATUS)"
+  echo ""
+  echo -e "${GREEN}Health check concluído.${RESET}"
+  pause
   return 0
 }
 
