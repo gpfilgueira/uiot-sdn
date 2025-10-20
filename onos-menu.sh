@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# ONOS Controller - Menu reorganizado
+# ONOS Controller - Menu reorganizado (versão ampliada)
+# Inclui: cores, barra de status, backup/restore netcfg,
+# healthcheck, export de topologia, quick-restart, logging
+# e modo "sem menu" via flags.
 # ============================================================
 
 # Carrega arquivo .secrets
@@ -11,6 +14,23 @@ else
     echo "Erro: Arquivo .secrets não encontrado!" >&2
     exit 1
 fi
+
+# ---------------------------
+# Cores (usadas em mensagens)
+# ---------------------------
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[1;36m'
+RESET='\033[0m'
+
+# ---------------------------
+# Log de ações
+# ---------------------------
+LOGFILE="onos-actions.log"
+log_action() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') | $(whoami) | $1" >> "$LOGFILE"
+}
 
 # Função auxiliar para pausar
 pause() {
@@ -25,6 +45,7 @@ start_onos_container() {
   if ! docker inspect onos >/dev/null 2>&1; then
     echo "Container ONOS não existe. Criando..."
     docker run -d -t -p 6653:6653 -p 8181:8181 -p 8101:8101 -p 5005:5005 -p 9876:9876 -p 830:830 --name onos onosproject/onos:2.7-latest
+    log_action "Criou container ONOS"
   else
     RUNNING=$(docker inspect -f '{{.State.Running}}' onos 2>/dev/null)
     if [ "$RUNNING" = "true" ]; then
@@ -33,6 +54,7 @@ start_onos_container() {
       echo "Container ONOS existe mas está parado. Iniciando..."
       docker start onos >/dev/null
       echo "Container ONOS iniciado."
+      log_action "Iniciou container ONOS"
     fi
   fi
   pause
@@ -48,8 +70,30 @@ stop_onos_container() {
       if docker ps -q -f name=onos >/dev/null; then
         docker stop onos >/dev/null
         echo "Container ONOS parado."
+        log_action "Parou container ONOS"
       else
         echo "Container ONOS não está rodando."
+      fi
+      ;;
+    *)
+      echo "Operação cancelada."
+      ;;
+  esac
+  pause
+}
+
+# Quick restart (restart_onos_container)
+restart_onos_container() {
+  read -p "Deseja reiniciar o ONOS? (s/N): " CONFIRM
+  case "$CONFIRM" in
+    [sS]|[sS][iI][mM])
+      echo "Reiniciando container ONOS..."
+      if docker ps -a -q -f name=onos >/dev/null; then
+        docker restart onos >/dev/null
+        echo -e "${GREEN}ONOS reiniciado com sucesso.${RESET}"
+        log_action "Reiniciou container ONOS"
+      else
+        echo "Container ONOS não existe. Use a opção de iniciar para criar." 
       fi
       ;;
     *)
@@ -63,6 +107,31 @@ stop_onos_container() {
 get_onos_ip() {
   docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' onos 2>/dev/null
 }
+
+# Barra de status reduzida (chamada em cabeçalho)
+show_status_header() {
+  clear
+  echo "=========================================="
+  echo "       ONOS Controller - Menu            "
+  echo "=========================================="
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo -e "Status: ${RED}PARADO${RESET}    | IP: N/D"
+  else
+    RUNNING=$(docker inspect -f '{{.State.Running}}' onos 2>/dev/null)
+    if [[ "$RUNNING" = "true" ]]; then
+      echo -e "Status: ${GREEN}RODANDO${RESET}   | IP: $CONTROLLER_IP"
+    else
+      echo -e "Status: ${YELLOW}PARADO (existente)${RESET}    | IP: N/D"
+    fi
+  fi
+  echo "------------------------------------------"
+  echo ""
+}
+
+# ---------------------------
+# Submenus e funções existentes (mantive tudo como antes)
+# ---------------------------
 
 # Função para mostrar o IP do container ONOS
 show_controller_ip() {
@@ -110,6 +179,7 @@ activate_apps() {
     echo "OK"
   done
   echo "Todas as aplicações ativadas."
+  log_action "Ativou apps via REST"
   pause
 }
 
@@ -188,6 +258,7 @@ apirest_friendlynames_json() {
 
     if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
         echo "JSON enviado com sucesso!"
+        log_action "Enviou network-cfg.json"
     else
         echo "Falha ao enviar JSON. Código HTTP: $RESPONSE"
     fi
@@ -322,6 +393,7 @@ block_onos_host() {
 
   if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
     echo "Host bloqueado com sucesso!"
+    log_action "Bloqueou host $SELECTED_MAC"
   else
     echo "Falha ao enviar flow. Código HTTP: $RESPONSE"
   fi
@@ -411,31 +483,163 @@ delete_noncore_flows() {
 }
 
 # ---------------------------
-# Cabeçalho / status
+# Novas funções solicitadas
 # ---------------------------
-show_status_header() {
-  clear
-  echo "=========================================="
-  echo "       ONOS Controller - Menu            "
-  echo "=========================================="
+
+# Backup do netcfg (salva em arquivo timestamp)
+backup_netcfg() {
   CONTROLLER_IP=$(get_onos_ip)
   if [[ -z $CONTROLLER_IP ]]; then
-    echo "Status: PARADO    | IP: N/D"
+    echo "ONOS não está rodando. Impossível fazer backup."
+    return 1
+  fi
+  BACKUP_FILE="netcfg-backup-$(date +%Y%m%d-%H%M%S).json"
+  curl -s -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration" > "$BACKUP_FILE"
+  if [[ $? -eq 0 ]]; then
+    echo "Backup salvo em $BACKUP_FILE"
+    log_action "Backup netcfg em $BACKUP_FILE"
+    return 0
   else
-    # tenta detectar se o container está rodando
-    RUNNING=$(docker inspect -f '{{.State.Running}}' onos 2>/dev/null)
-    if [[ "$RUNNING" = "true" ]]; then
-      echo "Status: RODANDO   | IP: $CONTROLLER_IP"
+    echo "Falha ao salvar backup de netcfg."
+    return 1
+  fi
+}
+
+# Restore do netcfg (enviar arquivo JSON para ONOS)
+restore_netcfg() {
+  FILE="$1"
+  if [[ -z "$FILE" || ! -f "$FILE" ]]; then
+    echo "Uso: restore_netcfg <arquivo.json>"
+    return 1
+  fi
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando. Impossível restaurar."
+    return 1
+  fi
+
+  echo "Enviando $FILE para ONOS (restore netcfg)..."
+  RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" -X POST \
+    -H "Content-Type: application/json" \
+    http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration \
+    -d @$FILE)
+
+  if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
+    echo "Restauração enviada com sucesso."
+    log_action "Restaurou netcfg a partir de $FILE"
+    return 0
+  else
+    echo "Falha ao restaurar. Código HTTP: $RESPONSE"
+    return 1
+  fi
+}
+
+# Mostrar netcfg (função pedida anteriormente)
+show_netcfg() {
+    CONTROLLER_IP=$(get_onos_ip)
+    if [[ -z $CONTROLLER_IP ]]; then
+        echo "ONOS não está rodando. Inicie o container primeiro."
+        pause
+        return
+    fi
+
+    echo "Obtendo configuração atual do ONOS (network-cfg)..."
+    echo ""
+
+    if command -v jq >/dev/null 2>&1; then
+        curl -s -u "$USER:$PASS" \
+            http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration | jq
     else
-      echo "Status: PARADO    | IP: N/D"
+        curl -s -u "$USER:$PASS" \
+            http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration
+    fi
+
+    pause
+}
+
+# Deleta completamente a configuração de rede (netcfg wipe-out)
+delete_netcfg() {
+    CONTROLLER_IP=$(get_onos_ip)
+    if [[ -z $CONTROLLER_IP ]]; then
+        echo "ONOS não está rodando. Inicie o container primeiro."
+        pause
+        return
+    fi
+
+    echo ""
+    read -p "Tem certeza que deseja APAGAR toda a configuração (network-cfg)? (s/N): " CONFIRM
+    case "$CONFIRM" in
+        [sS]|[sS][iI][mM])
+            echo "Criando backup antes do wipe..."
+            backup_netcfg || echo "Falha ao criar backup (prosseguindo com delete)."
+
+            echo "Removendo configuração de rede do ONOS..."
+            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+                -u "$USER:$PASS" \
+                -X DELETE \
+                http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/network/configuration)
+
+            if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
+                echo "Configuração de rede removida com sucesso!"
+                log_action "Apagou network-cfg (wipe-out)"
+            else
+                echo "Falha ao apagar configuração. Código HTTP: $RESPONSE"
+            fi
+            ;;
+        *)
+            echo "Operação cancelada."
+            ;;
+    esac
+
+    pause
+}
+
+# Health check do ONOS
+check_onos_health() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS offline ou IP não encontrado."
+    return 1
+  fi
+
+  # Tenta endpoint de health. Se não existir, tenta um GET simples para /system
+  if command -v jq >/dev/null 2>&1; then
+    RESP=$(curl -s -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system/health")
+    if [[ -n "$RESP" ]]; then
+      echo "$RESP" | jq
+      log_action "Checou health do ONOS"
+      return 0
     fi
   fi
-  echo "------------------------------------------"
-  echo ""
+
+  # fallback simples
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/system")
+  echo "Código HTTP do sistema: $STATUS"
+  log_action "Checou system status do ONOS (HTTP $STATUS)"
+  return 0
+}
+
+# Exportar topologia
+export_topology() {
+  CONTROLLER_IP=$(get_onos_ip)
+  if [[ -z $CONTROLLER_IP ]]; then
+    echo "ONOS não está rodando."
+    pause
+    return
+  fi
+  OUTPUT="onos-topology-$(date +%Y%m%d-%H%M%S).json"
+  curl -s -u "$USER:$PASS" "http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/topology" > "$OUTPUT"
+  if [[ $? -eq 0 ]]; then
+    echo "Topologia exportada em $OUTPUT"
+    log_action "Exportou topologia em $OUTPUT"
+  else
+    echo "Falha ao exportar topologia."
+  fi
+  pause
 }
 
 # ---------------------------
-# Submenus
+# Submenus (mantidos; adicionei entradas onde apropriado)
 # ---------------------------
 
 submenu_management() {
@@ -447,6 +651,7 @@ submenu_management() {
     echo "3) Abrir Web GUI no Firefox"
     echo "4) Conectar via SSH ao Karaf"
     echo "k) Parar ONOS"
+    echo "r) Reiniciar ONOS"
     echo "b) Voltar"
     echo ""
     read -rp "Escolha: " opt
@@ -456,6 +661,7 @@ submenu_management() {
       3) open_firefox ;;
       4) ssh_karaf ;;
       k) stop_onos_container ;;
+      r) restart_onos_container ;;
       b) break ;;
       *) echo "Opção inválida."; pause ;;
     esac
@@ -468,27 +674,83 @@ submenu_interactions() {
     echo "INTERAÇÕES REST / HOSTS / FLOWS"
     echo "1) Ativar aplicações ONOS (REST API)"
     echo "2) Enviar network-cfg.json via REST API"
-    echo "3) Mostrar link da Web GUI"
-    echo "4) Mostrar hosts atuais (REST API)"
-    echo "5) Bloquear um host (REST API)"
-    echo "6) Listar flows não-core (REST API)"
-    echo "7) Deletar flows não-core (REST API)"
+    echo "3) Mostrar configuração atual (netcfg)"
+    echo "4) Apagar configuração (wipe-out netcfg)"
+    echo "5) Restaurar configuração (restore netcfg de arquivo)"
+    echo "6) Fazer backup do netcfg"
+    echo "7) Mostrar link da Web GUI"
+    echo "8) Mostrar hosts atuais (REST API)"
+    echo "9) Bloquear um host (REST API)"
+    echo "a) Exportar topologia"
+    echo "l) Listar flows não-core (REST API)"
+    echo "d) Deletar flows não-core (REST API)"
+    echo "h) Health-check do ONOS"
     echo "b) Voltar"
     echo ""
     read -rp "Escolha: " opt
     case $opt in
       1) activate_apps ;;
       2) apirest_friendlynames_json ;;
-      3) show_gui_link ;;
-      4) show_onos_hosts ;;
-      5) block_onos_host ;;
-      6) list_non_core_flows ;;
-      7) delete_non_core_flows ;;
+      3) show_netcfg ;;
+      4) delete_netcfg ;;
+      5) 
+         read -rp "Arquivo JSON para restaurar: " F && restore_netcfg "$F" ;;
+      6) backup_netcfg ;;
+      7) show_gui_link ;;
+      8) show_onos_hosts ;;
+      9) block_onos_host ;;
+      a) export_topology ;;
+      l) list_non_core_flows ;;
+      d) delete_noncore_flows ;;
+      h) check_onos_health ;;
       b) break ;;
       *) echo "Opção inválida."; pause ;;
     esac
   done
 }
+
+# ---------------------------
+# Modo sem menu (flags) - permite chamadas diretas
+# ---------------------------
+
+print_usage() {
+  cat <<EOF
+Uso: $0 [OPÇÃO]
+Opções disponíveis (modo sem menu):
+  --backup-ncfg               : Faz backup do netcfg e salva arquivo
+  --restore-ncfg <arquivo>    : Restaura netcfg a partir do arquivo JSON
+  --show-ncfg                 : Mostra netcfg atual
+  --delete-ncfg               : Apaga network-cfg (wipe-out) com backup
+  --export-topology           : Exporta topologia para arquivo JSON
+  --health                    : Faz health-check do ONOS
+  --restart                   : Reinicia o container ONOS
+  --start                     : Inicia/cria o container ONOS
+  --stop                      : Para o container ONOS
+  --list-flows                : Lista flows não-core
+  --delete-flows              : Deleta flows não-core
+  --show-hosts                : Mostra hosts
+  --help                      : Mostra esta ajuda
+EOF
+}
+
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    --backup-ncfg) backup_netcfg; exit $? ;;
+    --restore-ncfg) restore_netcfg "$2"; exit $? ;;
+    --show-ncfg) show_netcfg; exit 0 ;;
+    --delete-ncfg) delete_netcfg; exit 0 ;;
+    --export-topology) export_topology; exit 0 ;;
+    --health) check_onos_health; exit 0 ;;
+    --restart) docker restart onos && echo "ONOS reiniciado" || echo "Falha ao reiniciar"; exit 0 ;;
+    --start) start_onos_container; exit 0 ;;
+    --stop) stop_onos_container; exit 0 ;;
+    --list-flows) list_non_core_flows; exit 0 ;;
+    --delete-flows) delete_noncore_flows; exit 0 ;;
+    --show-hosts) show_onos_hosts; exit 0 ;;
+    --help) print_usage; exit 0 ;;
+    *) echo "Opção desconhecida: $1"; print_usage; exit 1 ;;
+  esac
+fi
 
 # ---------------------------
 # Menu principal
