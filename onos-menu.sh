@@ -375,65 +375,39 @@ list_non_core_flows() {
 }
 
 # Função para deletar flows não-core selecionados
-delete_non_core_flows() {
-  CONTROLLER_IP=$(get_onos_ip)
-  if [[ -z $CONTROLLER_IP ]]; then
-    echo "ONOS não está rodando. Inicie o container primeiro."
-    pause
-    return
-  fi
+delete_noncore_flows() {
+    confirm_action "Deseja realmente apagar todos os flows não-core?" || return
+    echo -e "${CYAN}Apagando flows não-core...${RESET}"
 
-  if [[ ! -f /tmp/onos_noncore_flows.json ]]; then
-    echo "Nenhuma lista de flows encontrada. Rode 'Listar flows não-core' antes."
-    pause
-    return
-  fi
+    # Coleta os flows não-core atuais
+    local FLOW_IDS
+    FLOW_IDS=$(curl -s -u "$ONOS_USER:$ONOS_PASS" \
+        http://172.18.0.2:8181/onos/v1/flows | \
+        jq -r '.flows[] | select(.appId != "org.onosproject.core" and .state != "REMOVED") | .id')
 
-  NON_CORE=$(cat /tmp/onos_noncore_flows.json)
-  COUNT=$(echo "$NON_CORE" | jq 'length')
-  if [[ $COUNT -eq 0 ]]; then
-    echo "Nenhum flow não-core listado."
-    pause
-    return
-  fi
-
-  echo "=== Flows não-core ==="
-  for ((i=0; i<COUNT; i++)); do
-    ID=$(echo "$NON_CORE" | jq -r ".[$i].id")
-    SWITCH=$(echo "$NON_CORE" | jq -r ".[$i].deviceId")
-    APP=$(echo "$NON_CORE" | jq -r ".[$i].appId")
-    echo "$((i+1))) ID: $ID  |  App: $APP  |  Switch: $SWITCH"
-  done
-  echo "======================"
-  echo ""
-
-  read -p "Digite os números dos flows que deseja DELETAR (separados por espaço): " -a CHOICES
-  echo ""
-
-  for CHOICE in "${CHOICES[@]}"; do
-    if ! [[ $CHOICE =~ ^[0-9]+$ ]] || (( CHOICE < 1 || CHOICE > COUNT )); then
-      echo "Índice inválido: $CHOICE"
-      continue
+    if [ -z "$FLOW_IDS" ]; then
+        echo -e "${YELLOW}Nenhum flow não-core encontrado.${RESET}"
+        return
     fi
 
-    ID=$(echo "$NON_CORE" | jq -r ".[$((CHOICE-1))].id")
-    SWITCH=$(echo "$NON_CORE" | jq -r ".[$((CHOICE-1))].deviceId")
+    # Deleta cada flow
+    while read -r id; do
+        [ -z "$id" ] && continue
+        curl -s -u "$ONOS_USER:$ONOS_PASS" -X DELETE "http://172.18.0.2:8181/onos/v1/flows/$id" >/dev/null
+    done <<< "$FLOW_IDS"
 
-    echo -n "Removendo flow ID $ID do switch $SWITCH ... "
+    echo -e "${GREEN}Flows não-core removidos.${RESET}"
 
-    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-      -u "$USER:$PASS" \
-      -X DELETE \
-      http://$CONTROLLER_IP:$WEB_GUI_PORT/onos/v1/flows/$SWITCH/$ID)
+    # Aguarda atualização interna e limpa cache do ONOS
+    sleep 2
+    echo -e "${CYAN}Atualizando estado interno do ONOS...${RESET}"
+    curl -s -u "$ONOS_USER:$ONOS_PASS" -X POST http://172.18.0.2:8181/onos/v1/flows/reload >/dev/null 2>&1 || true
+    sleep 1
 
-    if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
-      echo "OK"
-    else
-      echo "Falha (HTTP $RESPONSE)"
-    fi
-  done
-
-  pause
+    # Mostra estado atual após limpeza
+    echo -e "${CYAN}Flows restantes:${RESET}"
+    curl -s -u "$ONOS_USER:$ONOS_PASS" http://172.18.0.2:8181/onos/v1/flows | \
+        jq '.flows[] | select(.appId != "org.onosproject.core") | {id: .id, app: .appId, state: .state}'
 }
 
 # ---------------------------
